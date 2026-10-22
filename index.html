@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聊天</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b5fc7'/%3E%3Cpath d='M9 11h10v2h-4v9h-2v-9H9z' fill='white'/%3E%3Ccircle cx='23' cy='12' r='3' fill='white'/%3E%3C/svg%3E">
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<style>
+:root{
+  --brand:#5b5fc7; --brand-dark:#4f52b2; --brand-light:#e8ebfa; --brand-bg:#ebebf5;
+  --bg:#f5f5f5; --panel:#ffffff; --rail:#ebebeb; --list:#f5f5f5;
+  --text:#242424; --sub:#616161; --mute:#8a8a8a; --line:#e0e0e0;
+  --mine:#e8ebfa; --theirs:#ffffff; --online:#6bb700; --away:#ffaa44; --busy:#c50f1f;
+  --font:"Segoe UI","Segoe UI Web (West European)",-apple-system,BlinkMacSystemFont,"Microsoft YaHei","PingFang SC","Hiragino Sans",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);font-size:14px;color:var(--text);background:var(--bg);overflow:hidden;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+svg{display:block}
+.ico{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------- layout ---------- */
+.app{display:grid;grid-template-rows:48px 1fr;grid-template-columns:68px 300px 1fr;height:100vh}
+.top{grid-column:1/-1;display:flex;align-items:center;background:var(--rail);padding:0 8px 0 0;gap:6px}
+.top .logo{width:68px;display:flex;justify-content:center}
+.top .logo span{width:24px;height:24px;border-radius:5px;background:var(--brand);display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px}
+.nav{display:flex;gap:2px;color:var(--mute)}
+.nav button{width:32px;height:32px;border-radius:4px;display:grid;place-items:center}
+.nav button:hover{background:#ddd}
+.search{flex:1;max-width:620px;margin:0 auto;height:32px;background:#fff;border-radius:4px;display:flex;align-items:center;gap:8px;padding:0 10px;color:var(--sub);border:1px solid transparent}
+.search:focus-within{border-color:var(--brand)}
+.search input{border:0;outline:0;flex:1;font:inherit;background:none;color:var(--text)}
+.top-right{display:flex;align-items:center;gap:6px}
+.top-right .dots{width:32px;height:32px;display:grid;place-items:center;border-radius:4px;color:var(--sub)}
+.top-right .dots:hover{background:#ddd}
+.win{display:flex;color:var(--sub)}
+.win span{width:44px;height:32px;display:grid;place-items:center}
+
+/* rail */
+.rail{background:var(--rail);display:flex;flex-direction:column;align-items:center;padding-top:4px;gap:2px}
+.rail button{width:60px;height:54px;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10px;color:var(--sub);position:relative}
+.rail button:hover{background:#e0e0e0;color:var(--text)}
+.rail button.on{color:var(--brand)}
+.rail button.on::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:2px;background:var(--brand)}
+.rail .ico{width:22px;height:22px}
+.rail .badge{position:absolute;top:6px;right:14px;min-width:16px;height:16px;border-radius:8px;background:var(--busy);color:#fff;font-size:10px;line-height:16px;padding:0 4px;display:none}
+.rail .spacer{flex:1}
+
+/* list */
+.list{background:var(--list);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;border-top-left-radius:8px}
+.list-h{height:56px;display:flex;align-items:center;padding:0 12px 0 20px;gap:4px}
+.list-h h1{font-size:18px;font-weight:700;flex:1}
+.list-h button{width:32px;height:32px;border-radius:4px;display:grid;place-items:center;color:var(--sub)}
+.list-h button:hover{background:#e6e6e6}
+.chips{display:flex;gap:6px;padding:4px 20px 12px;border-bottom:1px solid var(--line)}
+.chips button{border:1px solid #d1d1d1;border-radius:14px;padding:2px 10px;font-size:12px;background:#fff}
+.chips button.on{background:var(--brand-light);border-color:var(--brand);color:var(--brand-dark)}
+.scroll{overflow-y:auto;flex:1;padding-bottom:12px}
+.scroll::-webkit-scrollbar,.msgs::-webkit-scrollbar{width:8px}
+.scroll::-webkit-scrollbar-thumb,.msgs::-webkit-scrollbar-thumb{background:#c8c8c8;border-radius:4px;border:2px solid transparent;background-clip:content-box}
+.sec{display:flex;align-items:center;gap:4px;padding:12px 16px 4px;font-size:13px;color:var(--sub);cursor:default}
+.sec svg{width:12px;height:12px}
+.item{display:flex;align-items:center;gap:10px;margin:2px 8px;padding:8px 10px;border-radius:6px;cursor:pointer;position:relative}
+.item:hover{background:#ebebeb}
+.item.on{background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.item .meta{flex:1;min-width:0}
+.item .row{display:flex;justify-content:space-between;gap:6px}
+.item .name{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .time{font-size:12px;color:var(--sub);flex-shrink:0}
+.item .prev{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.item.unread .name,.item.unread .prev{font-weight:700;color:var(--text)}
+.item .unread-dot{display:none;position:absolute;left:2px;top:50%;width:5px;height:5px;margin-top:-2px;border-radius:50%;background:var(--brand)}
+.item.unread .unread-dot{display:block}
+
+/* avatars */
+.av{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;font-size:12px;font-weight:600;position:relative;letter-spacing:.3px}
+.av.lg{width:36px;height:36px;font-size:13px}
+.av.sm{width:28px;height:28px;font-size:11px}
+.av .st{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;border:2px solid var(--list);background:#fff}
+.st.on{background:var(--online)}
+.st.on::after{content:"";position:absolute;left:2px;top:3px;width:4px;height:2px;border-left:1.5px solid #fff;border-bottom:1.5px solid #fff;transform:rotate(-45deg)}
+.st.away{background:var(--away)}
+.st.busy{background:var(--busy)}
+.st.off{background:#fff;box-shadow:inset 0 0 0 1.5px #8a8a8a}
+.grp{border-radius:50%;overflow:hidden;display:grid;grid-template-columns:1fr 1fr;width:32px;height:32px;flex-shrink:0;font-size:9px;font-weight:600}
+.grp span{display:grid;place-items:center}
+
+/* main */
+.main{background:var(--panel);display:flex;flex-direction:column;min-width:0;min-height:0}
+.main-h{height:62px;display:flex;align-items:center;gap:12px;padding:0 16px 0 20px;border-bottom:1px solid var(--line);flex-shrink:0}
+.main-h .av .st{border-color:#fff}
+.main-h .title{font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+.tabs{display:flex;gap:2px;margin-left:8px;height:100%}
+.tabs button{padding:0 10px;height:100%;position:relative;color:var(--sub)}
+.tabs button.on{color:var(--text);font-weight:600}
+.tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:3px;border-radius:2px 2px 0 0;background:var(--brand)}
+.tabs button:hover{color:var(--text)}
+.main-h .grow{flex:1}
+.main-h .act{width:32px;height:32px;border-radius:4px;display:grid;place-items:center;color:var(--sub)}
+.main-h .act:hover{background:#f0f0f0}
+.conn{font-size:12px;color:var(--mute);margin-right:4px;white-space:nowrap}
+
+.msgs{flex:1;overflow-y:auto;padding:16px 0 8px;background:#f5f5f5}
+.msgs-inner{max-width:1100px;margin:0 auto;padding:0 32px}
+.divider{text-align:center;margin:18px 0 10px;font-size:12px;color:var(--sub)}
+.m{display:flex;gap:10px;margin-top:14px}
+.m.cont{margin-top:3px}
+.m.cont .av{visibility:hidden}
+.m .body{max-width:min(680px,75%)}
+.m .info{font-size:12px;color:var(--sub);margin-bottom:3px;display:flex;gap:8px}
+.m .info b{font-weight:600;color:var(--text)}
+.bub{padding:8px 14px;border-radius:6px;line-height:1.5;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.theirs .bub{background:var(--theirs)}
+.m.mine{justify-content:flex-end}
+.m.mine .info{justify-content:flex-end}
+.mine .bub{background:var(--mine)}
+.bub a{color:var(--brand-dark)}
+.bub img{max-width:320px;max-height:320px;border-radius:4px;display:block;margin:2px 0;cursor:zoom-in}
+.m .tick{font-size:11px;color:var(--brand);text-align:right;margin-top:2px;height:14px}
+.typing{height:22px;padding:0 32px;font-size:12px;color:var(--sub);max-width:1100px;margin:0 auto;width:100%;background:#f5f5f5}
+.typing span{display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--sub);margin-right:2px;animation:blink 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+
+.composer{padding:0 32px 18px;background:#f5f5f5}
+.box{max-width:1036px;margin:0 auto;background:#fff;border-radius:6px;border:1px solid var(--line);border-bottom:2px solid transparent;display:flex;align-items:flex-end;gap:6px;padding:6px 8px 6px 14px;transition:border-color .1s}
+.box:focus-within{border-bottom-color:var(--brand)}
+.box textarea{flex:1;border:0;outline:0;resize:none;font:inherit;line-height:20px;max-height:160px;padding:6px 0;background:none;color:var(--text)}
+.box textarea::placeholder{color:var(--sub)}
+.tools{display:flex;gap:2px;color:var(--sub)}
+.tools button,.send{width:32px;height:32px;border-radius:4px;display:grid;place-items:center}
+.tools button:hover{background:#f0f0f0}
+.send{color:var(--mute)}
+.send.ready{color:var(--brand)}
+.send.ready:hover{background:var(--brand-light)}
+.emoji-pop{position:absolute;bottom:64px;right:60px;background:#fff;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:8px;display:none;grid-template-columns:repeat(8,32px);gap:2px;z-index:10}
+.emoji-pop button{font-size:20px;width:32px;height:32px;border-radius:4px}
+.emoji-pop button:hover{background:#f0f0f0}
+.composer{position:relative}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--sub);gap:10px;text-align:center}
+.empty .av{width:72px;height:72px;font-size:24px}
+
+/* setup modal */
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;place-items:center;z-index:50}
+.mask.show{display:grid}
+.dlg{background:#fff;border-radius:8px;width:420px;max-width:calc(100vw - 32px);padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.dlg h2{font-size:18px;font-weight:700;margin-bottom:4px}
+.dlg p{color:var(--sub);font-size:13px;margin-bottom:18px;line-height:1.5}
+.dlg label{display:block;font-size:13px;font-weight:600;margin:12px 0 6px}
+.dlg input{width:100%;height:32px;border:1px solid #d1d1d1;border-bottom-color:#616161;border-radius:4px;padding:0 10px;font:inherit;outline:0}
+.dlg input:focus{border-bottom:2px solid var(--brand)}
+.dlg .btns{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
+.btn{height:32px;padding:0 16px;border-radius:4px;font-weight:600;border:1px solid #d1d1d1;background:#fff}
+.btn.pri{background:var(--brand);color:#fff;border-color:var(--brand)}
+.btn.pri:hover{background:var(--brand-dark)}
+.hint{font-size:12px;color:var(--mute);margin-top:6px;line-height:1.5}
+
+.menu{position:fixed;background:#fff;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:4px;display:none;z-index:40;min-width:180px}
+.menu button{display:block;width:100%;text-align:left;padding:8px 12px;border-radius:4px;font-size:13px}
+.menu button:hover{background:#f0f0f0}
+.menu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;place-items:center;z-index:60;cursor:zoom-out}
+.lightbox img{max-width:92vw;max-height:92vh}
+
+@media (max-width:860px){.app{grid-template-columns:0 0 1fr}.rail,.list{display:none}.msgs-inner,.composer,.typing{padding-left:12px;padding-right:12px}.tabs,.win{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- top bar -->
+  <div class="top">
+    <div class="logo"><span>T</span></div>
+    <div class="nav">
+      <button title="后退"><svg class="ico" viewBox="0 0 20 20"><path d="M12.5 4.5 7 10l5.5 5.5"/></svg></button>
+      <button title="前进"><svg class="ico" viewBox="0 0 20 20"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg></button>
+    </div>
+    <label class="search"><svg class="ico" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input id="search" placeholder="搜索 (Ctrl+E)"></label>
+    <div class="top-right">
+      <button class="dots" id="topMenu" title="设置及其他"><svg class="ico" viewBox="0 0 20 20"><circle cx="5" cy="10" r=".8" fill="currentColor"/><circle cx="10" cy="10" r=".8" fill="currentColor"/><circle cx="15" cy="10" r=".8" fill="currentColor"/></svg></button>
+      <div class="av sm" id="meAv"><span class="st on" style="border-color:var(--rail)"></span></div>
+      <div class="win">
+        <span><svg class="ico" viewBox="0 0 20 20"><path d="M5 10h10"/></svg></span>
+        <span><svg class="ico" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="1"/></svg></span>
+        <span><svg class="ico" viewBox="0 0 20 20"><path d="m5.5 5.5 9 9m0-9-9 9"/></svg></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- left rail -->
+  <nav class="rail">
+    <button class="on"><svg class="ico" viewBox="0 0 24 24"><path d="M4 11.5C4 7.4 7.6 4.5 12 4.5s8 2.9 8 7-3.6 7-8 7c-1.1 0-2.2-.2-3.1-.5L5 19.5l1.2-3.4C4.8 14.9 4 13.3 4 11.5Z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>聊天<span class="badge" id="railBadge"></span></button>
+    <button><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="8" r="2.6"/><circle cx="6" cy="9.5" r="2"/><circle cx="18" cy="9.5" r="2"/><path d="M8 18.5v-2c0-1.7 1.8-3 4-3s4 1.3 4 3v2M3 17.5v-1c0-1.3 1.3-2.3 3-2.3M21 17.5v-1c0-1.3-1.3-2.3-3-2.3"/></svg>团队</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><path d="M7 4.5h10a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V6A1.5 1.5 0 0 1 7 4.5Z"/><path d="M5.5 11h13M10 7.5h4"/></svg>分配</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 9.5h16M8.5 13h.01M12 13h.01M15.5 13h.01M8.5 16.5h.01M12 16.5h.01"/></svg>日历</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><path d="M7.5 4.5 9.6 8 8 9.7c.9 2.3 2.4 3.8 4.3 4.6L14 12.7l3.5 2.1-.8 2.8c-.3.9-1.1 1.4-2 1.3C9.6 18.3 5.7 14.4 5.1 9.3c-.1-.9.4-1.7 1.3-2l1.1-2.8Z"/></svg>通话</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><path d="M12 4.5c3 0 5.5 2.4 5.5 5.5v3.2l1.5 2.8H5l1.5-2.8V10c0-3.1 2.5-5.5 5.5-5.5ZM10 18.5a2 2 0 0 0 4 0"/></svg>活动</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><path d="M7 18.5h10.5a3.5 3.5 0 0 0 .4-7A5 5 0 0 0 8.4 10 4.3 4.3 0 0 0 7 18.5Z"/></svg>文件</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M12 9v6M9 12h6"/></svg>应用</button>
+    <button><svg class="ico" viewBox="0 0 24 24"><circle cx="6.5" cy="12" r=".9" fill="currentColor"/><circle cx="12" cy="12" r=".9" fill="currentColor"/><circle cx="17.5" cy="12" r=".9" fill="currentColor"/></svg></button>
+  </nav>
+
+  <!-- chat list -->
+  <aside class="list">
+    <div class="list-h">
+      <h1>聊天</h1>
+      <button title="更多"><svg class="ico" viewBox="0 0 20 20"><circle cx="5" cy="10" r=".8" fill="currentColor"/><circle cx="10" cy="10" r=".8" fill="currentColor"/><circle cx="15" cy="10" r=".8" fill="currentColor"/></svg></button>
+      <button title="筛选"><svg class="ico" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg></button>
+      <button title="新聊天"><svg class="ico" viewBox="0 0 20 20"><path d="M15 3.5 16.5 5 9 12.5l-2 .5.5-2L15 3.5ZM14 10v5.5a1 1 0 0 1-1 1H4.5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1H10"/></svg></button>
+    </div>
+    <div class="chips"><button>未读</button><button>聊天</button><button>会议聊天</button></div>
+    <div class="scroll">
+      <div class="item" style="cursor:default"><svg class="ico" viewBox="0 0 20 20" style="margin:0 6px"><path d="M7 4.5h6a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3Z"/><path d="M8 9.5h.01M12 9.5h.01"/></svg><span>Copilot</span></div>
+      <div class="sec" style="padding-top:2px;padding-bottom:10px;border-bottom:1px solid var(--line);margin:0 12px 2px"><svg viewBox="0 0 12 12"><path d="M4.5 3 7.5 6l-3 3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>快速视图</div>
+      <div class="sec"><svg viewBox="0 0 12 12"><path d="M3 4.5 6 7.5l3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>收藏夹</div>
+      <div id="favList"></div>
+      <div class="sec"><svg viewBox="0 0 12 12"><path d="M3 4.5 6 7.5l3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>聊天</div>
+      <div id="chatList"></div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="main">
+    <div class="main-h">
+      <div id="hAv"></div>
+      <div class="title" id="hTitle">聊天</div>
+      <div class="tabs"><button class="on">聊天</button><button>已共享</button><button>笔记</button></div>
+      <div class="grow"></div>
+      <span class="conn" id="conn"></span>
+      <button class="act" title="视频通话"><svg class="ico" viewBox="0 0 20 20"><rect x="2.5" y="5.5" width="10.5" height="9" rx="1.5"/><path d="m13 9 4.5-2.5v7L13 11"/></svg></button>
+      <button class="act" title="音频通话"><svg class="ico" viewBox="0 0 20 20"><path d="M6 3.5 7.8 6.5 6.5 8c.7 1.9 2 3.2 3.6 3.9l1.4-1.3 3 1.8-.7 2.4c-.2.7-.9 1.2-1.7 1.1C7.7 15.4 4.4 12.1 3.9 7.8c-.1-.8.4-1.5 1.1-1.7L6 3.5Z"/></svg></button>
+      <button class="act" title="搜索"><svg class="ico" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg></button>
+      <button class="act" id="chatMenu" title="更多选项"><svg class="ico" viewBox="0 0 20 20"><circle cx="5" cy="10" r=".8" fill="currentColor"/><circle cx="10" cy="10" r=".8" fill="currentColor"/><circle cx="15" cy="10" r=".8" fill="currentColor"/></svg></button>
+    </div>
+    <div class="msgs" id="msgs"><div class="msgs-inner" id="msgsInner"></div></div>
+    <div class="typing" id="typing"></div>
+    <div class="composer">
+      <div class="emoji-pop" id="emojiPop"></div>
+      <div class="box">
+        <textarea id="input" rows="1" placeholder="键入消息"></textarea>
+        <div class="tools">
+          <button title="格式"><svg class="ico" viewBox="0 0 20 20"><path d="M4 16 9 4l5 12M6 11.5h6M13 16.5l4-4"/></svg></button>
+          <button title="表情符号" id="emojiBtn"><svg class="ico" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M7 11.8c.7 1 1.8 1.7 3 1.7s2.3-.7 3-1.7"/><circle cx="7.5" cy="8.3" r=".6" fill="currentColor"/><circle cx="12.5" cy="8.3" r=".6" fill="currentColor"/></svg></button>
+          <button title="附加图片" id="attachBtn"><svg class="ico" viewBox="0 0 20 20"><path d="m15 9.5-5.3 5.3a3.3 3.3 0 0 1-4.7-4.7l6-6a2.2 2.2 0 0 1 3.1 3.1l-6 6a1.1 1.1 0 0 1-1.5-1.6L12 6"/></svg></button>
+          <button title="循环组件"><svg class="ico" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><path d="M7.5 10a2.5 2.5 0 1 1 2.5 2.5"/></svg></button>
+          <button title="操作和应用"><svg class="ico" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></svg></button>
+        </div>
+        <button class="send" id="sendBtn" title="发送 (Enter)"><svg class="ico" viewBox="0 0 20 20"><path d="M3.5 3.8 17 10 3.5 16.2 5.5 10 3.5 3.8ZM5.5 10H11"/></svg></button>
+        <input type="file" id="file" accept="image/*" hidden>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="menu" id="menu">
+  <button data-a="settings">更改名字 / 房间码</button>
+  <button data-a="clear">清空本机聊天记录</button>
+  <hr>
+  <button data-a="help">快捷键：Esc 一键切到工作群</button>
+</div>
+
+<div class="mask" id="setup">
+  <div class="dlg">
+    <h2>加入聊天</h2>
+    <p>你和朋友填同一个房间码就能互相看到。消息在浏览器里用房间码加密后再发出，服务器看不到内容。</p>
+    <label>你的显示名</label>
+    <input id="sName" maxlength="40" placeholder="例如 WU Zeyi">
+    <label>房间码</label>
+    <input id="sRoom" maxlength="80" placeholder="和朋友约定一个不容易猜的词">
+    <div class="hint">建议 8 位以上，例如 <code>maple-0427-tea</code>。房间码就是密码。</div>
+    <div class="btns"><button class="btn" id="sCancel">取消</button><button class="btn pri" id="sOk">进入</button></div>
+  </div>
+</div>
+<div class="lightbox" id="lightbox"><img alt=""></div>
+
+<script>
+(() => {
+'use strict';
+/* ================= config ================= */
+const params = new URLSearchParams(location.search);
+const BROKERS = params.get('broker') ? [params.get('broker')] : [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt'
+];
+const LS = k => 'tchat_' + k;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(LS(k)); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(LS(k), JSON.stringify(v)); } catch {} }
+};
+
+/* ================= decoy chats (Esc 切换) ================= */
+const DECOYS = [
+  { id:'d1', name:'授業内試験', group:['#0078d4','#c4314b','#038387','#8764b8'], time:'12:30', prev:'KOUMATSU Sachiko: 皆さん、お疲れ様です。中間試験の…',
+    msgs:[['KOUMATSU Sachiko','皆さん、お疲れ様です。中間試験の問題は今週金曜 17:00 までに共有フォルダへアップロードをお願いします。'],['TAKEDA SATORU','承知しました。担当の2科目は本日午後に提出します。'],['KOUMATSU Sachiko','追試の対象者リストも更新しましたので、担当科目のご確認をお願いします。'],['你','承知しました。確認後にご連絡します。']]},
+  { id:'d2', name:'試験×アドバイジング', group:['#0078d4','#ca5010'], time:'11:18', prev:'KOUMATSU Sachiko: 1122527 の学生の件、確認しました',
+    msgs:[['KOUMATSU Sachiko','1122527 の学生の件、先生と確認しました。受付可能とのことです。'],['你','ありがとうございます。こちらで登録しておきます。'],['KOUMATSU Sachiko','締切は 10/31 ですので、学生にもリマインドをお願いします。']]},
+  { id:'d3', name:'教務×アドバイジング', group:['#498205','#ca5010'], time:'10/21', prev:'INUI SAYAKO: 本件、先生と電話で確認しました。',
+    msgs:[['INUI SAYAKO','履修変更の申請について、本件、先生と電話で確認しました。'],['你','ご確認ありがとうございます。']]},
+  { id:'d4', name:'(Salesforce)成績問合せ対応', group:['#0078d4','#038387'], time:'10/20', prev:'TAKEDA SATORU: そろそろシステムの準備を始めましょうか',
+    msgs:[['TAKEDA SATORU','成績問合せのテンプレートを修正しましたので、ご確認ください。'],['你','拝見しました。3列目の書式だけ調整が必要そうです。'],['TAKEDA SATORU','了解です。修正して再送します。そろそろシステムの準備を始めましょうか。']]},
+  { id:'d5', name:'試験・成績チーム', group:['#0078d4','#038387'], time:'10/20', prev:'NAKANO Chinatsu: 皆様 ALCAの成績入力について…',
+    msgs:[['NAKANO Chinatsu','皆様 ALCAの成績入力について、締切は 11/5 です。よろしくお願いします。'],['你','承知しました。']]},
+  { id:'d6', name:'NAKANO Chinatsu(c-nakano)', st:'on', time:'10/16', prev:'ありがとう！ Formsの回答データ、確認できました',
+    msgs:[['NAKANO Chinatsu','ありがとう！ Formsの回答データ、確認できました。'],['你','どういたしまして。何かあればいつでも。']]},
+  { id:'d7', name:'TSUTSUMI Mai(m-tsutsumi)', st:'away', time:'10/15', prev:'・山浦先生から試験時間の返信がありました',
+    msgs:[['TSUTSUMI Mai','・山浦先生から試験時間の返信がありましたので、学生に転送済みです。']]},
+  { id:'d8', name:'OTA KEIICHIRO(k-ota)', st:'on', time:'10/15', prev:'OK!',
+    msgs:[['你','太田さん、明日の打ち合わせ 14:00 からで大丈夫でしょうか。'],['OTA KEIICHIRO','OK!']]},
+  { id:'d9', name:'NAKAHARA YASUHIRO', st:'busy', time:'10/1', prev:'你: 中原さん、9月の勤務を提出しました',
+    msgs:[['你','中原さん、9月の勤務を提出しましたので、ご確認お願いします。']]},
+  { id:'d10', name:'KAWAHARA Hisayo(h-kawahara)', st:'away', time:'9/28', prev:'你: 河原さん、業務時間外に失礼します',
+    msgs:[['你','河原さん、業務時間外に失礼します。来週のシフトの件、確認いただけますか。']]},
+  { id:'d11', name:'AC教務チーム', group:['#498205','#ca5010'], time:'9/25', prev:'KUDO Hanae: 皆様 教員橋本先生より連絡がありました',
+    msgs:[['KUDO Hanae','皆様 教員橋本先生より連絡があり、教員ハンドブックが更新されました。最新版をご確認ください。']]},
+  { id:'d12', name:'26秋入学式ポスター', group:['#0078d4','#986f0b'], time:'9/24', prev:'JOHNSON Anne Renee: 先ほどデザイン案を共有しました',
+    msgs:[['JOHNSON Anne Renee','先ほどデザイン案を共有しました。ご意見をお願いします。'],['你','拝見します。']]},
+  { id:'d13', name:'郵便当番（火曜）2026秋', group:['#c239b3','#038387'], time:'9/17', prev:'你: 確認しました、ありがとうございます',
+    msgs:[['KOUMATSU Sachiko','来週火曜の郵便当番、交代になりました。'],['你','確認しました、ありがとうございます。']]},
+];
+const PALETTE = ['#0078d4','#038387','#8764b8','#ca5010','#c239b3','#498205','#e3008c','#986f0b','#4f6bed','#d13438'];
+
+/* ================= state ================= */
+let me = store.get('me', null);            // {id,name,room}
+let peer = store.get('peer', {});          // {name, id}
+let history = [];
+let current = 'friend';
+let lastSeen = 0, typingUntil = 0, unread = 0;
+let client = null, key = null, topic = '';
+let brokerIdx = 0;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const initials = n => { n = (n||'?').trim(); const p = n.split(/[\s(（]+/).filter(Boolean);
+  if (/^[぀-鿿]/.test(n)) return n.slice(0, 2);
+  return ((p[0]||'?')[0] + (p[1] ? p[1][0] : (p[0][1]||''))).toUpperCase(); };
+const colorOf = s => { let h = 0; for (const c of String(s)) h = (h*31 + c.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; };
+const tint = (hex, a) => { const n = parseInt(hex.slice(1),16); const r=n>>16, g=n>>8&255, b=n&255;
+  return `rgb(${Math.round(r+(255-r)*a)},${Math.round(g+(255-g)*a)},${Math.round(b+(255-b)*a)})`; };
+const avatar = (name, cls = '', st = '') => { const c = colorOf(name);
+  return `<div class="av ${cls}" style="background:${tint(c,.78)};color:${c}">${esc(initials(name))}${st?`<span class="st ${st}"></span>`:''}</div>`; };
+const groupAv = cols => `<div class="grp">${cols.slice(0,4).concat(cols.length<4?cols.slice(0,4-cols.length):[]).slice(0,4)
+  .map(c=>`<span style="background:${tint(c,.75)};color:${c}">${'CKNA'[cols.indexOf(c)%4]}</span>`).join('')}</div>`;
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+/* ================= time formatting ================= */
+const pad = n => String(n).padStart(2, '0');
+const sameDay = (a, b) => a.toDateString() === b.toDateString();
+const WEEK = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
+function dayLabel(ts) { const d = new Date(ts), now = new Date();
+  if (sameDay(d, now)) return '今天';
+  const y = new Date(now); y.setDate(now.getDate() - 1); if (sameDay(d, y)) return '昨天';
+  if (now - d < 6 * 864e5) return WEEK[d.getDay()];
+  return `${d.getMonth()+1}月${d.getDate()}日`; }
+function shortTime(ts) { const d = new Date(ts), now = new Date();
+  return sameDay(d, now) ? `${d.getHours()}:${pad(d.getMinutes())}` : `${d.getMonth()+1}/${d.getDate()}`; }
+function fullTime(ts) { const d = new Date(ts); return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; }
+
+/* ================= crypto ================= */
+const enc = new TextEncoder(), dec = new TextDecoder();
+async function deriveKey(room) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(room), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name:'PBKDF2', salt: enc.encode('tchat-salt-v1'), iterations: 150000, hash:'SHA-256' },
+    base, { name:'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+}
+async function roomTopic(room) {
+  const h = await crypto.subtle.digest('SHA-256', enc.encode('tchat-topic|' + room));
+  return 'tchat/v1/' + [...new Uint8Array(h)].slice(0, 16).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+const b64 = buf => { let s = ''; const a = new Uint8Array(buf); for (let i=0;i<a.length;i+=0x8000) s += String.fromCharCode(...a.subarray(i,i+0x8000)); return btoa(s); };
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function seal(obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
+  return b64(iv) + '.' + b64(ct);
+}
+async function open(str) {
+  const [iv, ct] = str.split('.');
+  const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: unb64(iv) }, key, unb64(ct));
+  return JSON.parse(dec.decode(pt));
+}
+
+/* ================= history ================= */
+const histKey = () => 'hist_' + topic;
+function loadHistory() { history = store.get(histKey(), []); }
+function saveHistory() { if (history.length > 800) history = history.slice(-800); store.set(histKey(), history); }
+function addMessage(m) {
+  if (history.some(x => x.id === m.id)) return false;
+  history.push(m); history.sort((a, b) => a.ts - b.ts); saveHistory(); return true;
+}
+
+/* ================= networking ================= */
+function setConn(t) { $('conn').textContent = t; }
+async function connect() {
+  if (client) { try { client.end(true); } catch {} client = null; }
+  key = await deriveKey(me.room);
+  topic = await roomTopic(me.room);
+  loadHistory(); renderAll();
+  if (typeof mqtt === 'undefined') { setConn('离线'); return; }
+  const url = BROKERS[brokerIdx % BROKERS.length];
+  setConn('正在连接…');
+  client = mqtt.connect(url, { clientId: 'tc_' + uid(), clean: true, reconnectPeriod: 3000, connectTimeout: 8000, keepalive: 30 });
+  let ok = false;
+  client.on('connect', () => {
+    ok = true; setConn('');
+    client.subscribe(topic, { qos: 1 });
+    publish({ t:'hello' });
+  });
+  client.on('message', async (_t, payload) => {
+    let d; try { d = await open(payload.toString()); } catch { return; }
+    if (!d || d.from === me.id) return;
+    handle(d);
+  });
+  client.on('offline', () => setConn('连接中断，正在重连…'));
+  client.on('error', () => {});
+  setTimeout(() => { if (!ok && client) { brokerIdx++; connect(); } }, 10000);
+}
+async function publish(obj) {
+  if (!client || !client.connected) return false;
+  obj.from = me.id; obj.name = me.name;
+  client.publish(topic, await seal(obj), { qos: 1 });
+  return true;
+}
+function seen(d) {
+  lastSeen = Date.now();
+  if (d.name && (peer.name !== d.name || peer.id !== d.from)) { peer = { name: d.name, id: d.from }; store.set('peer', peer); renderList(); renderHeader(); }
+}
+function handle(d) {
+  seen(d);
+  switch (d.t) {
+    case 'hello':
+      publish({ t:'hist', msgs: history.slice(-60) });
+      break;
+    case 'hist': {
+      let added = 0;
+      for (const m of d.msgs || []) if (m && m.id && addMessage(m)) added++;
+      if (added) renderAll();
+      break; }
+    case 'ping': break;
+    case 'typing': typingUntil = Date.now() + 4000; renderTyping(); break;
+    case 'msg': {
+      typingUntil = 0; renderTyping();
+      if (addMessage(d.m)) {
+        publish({ t:'ack', id: d.m.id });
+        if (current !== 'friend' || document.hidden) { unread++; renderBadge(); }
+        renderAll();
+      }
+      break; }
+    case 'ack': {
+      const m = history.find(x => x.id === d.id); if (m && !m.read) { m.read = true; saveHistory(); renderMsgs(true); }
+      break; }
+  }
+}
+setInterval(() => { publish({ t:'ping' }); renderHeader(); renderList(); }, 15000);
+setInterval(renderTyping, 1000);
+
+/* ================= sending ================= */
+async function send(text, img) {
+  text = (text || '').replace(/\s+$/, '');
+  if (!text && !img) return;
+  const m = { id: uid(), from: me.id, name: me.name, text, img, ts: Date.now() };
+  addMessage(m); renderAll(); scrollBottom();
+  if (!await publish({ t:'msg', m })) { m.pending = true; saveHistory(); }
+}
+function flushPending() {
+  history.filter(m => m.pending && m.from === me.id).forEach(async m => { if (await publish({ t:'msg', m: { ...m, pending: undefined } })) { delete m.pending; saveHistory(); } });
+}
+setInterval(flushPending, 5000);
+
+/* ================= rendering ================= */
+const peerName = () => peer.name || '等待朋友加入…';
+const peerOnline = () => Date.now() - lastSeen < 40000;
+
+function renderHeader() {
+  const av = $('hAv'), t = $('hTitle');
+  if (current === 'friend') {
+    av.innerHTML = avatar(peer.name || '?', 'lg', peerOnline() ? 'on' : 'off');
+    t.textContent = peerName();
+  } else {
+    const d = DECOYS.find(x => x.id === current);
+    av.innerHTML = d.group ? groupAv(d.group) : avatar(d.name, 'lg', d.st);
+    t.textContent = d.name;
+  }
+}
+function renderList() {
+  const last = history[history.length - 1];
+  const prev = last ? (last.from === me?.id ? '你: ' : '') + (last.img && !last.text ? '[图片]' : last.text.split('\n')[0]) : '开始聊天';
+  $('favList').innerHTML = `<div class="item ${current==='friend'?'on':''} ${unread?'unread':''}" data-id="friend"><span class="unread-dot"></span>
+    ${avatar(peer.name || '?', '', peerOnline() ? 'on' : 'off')}
+    <div class="meta"><div class="row"><span class="name">${esc(peerName())}</span><span class="time">${last ? shortTime(last.ts) : ''}</span></div>
+    <div class="prev">${esc(prev)}</div></div></div>`;
+  $('chatList').innerHTML = DECOYS.map(d => `<div class="item ${current===d.id?'on':''}" data-id="${d.id}">
+    ${d.group ? groupAv(d.group) : avatar(d.name, '', d.st)}
+    <div class="meta"><div class="row"><span class="name">${esc(d.name)}</span><span class="time">${d.time}</span></div>
+    <div class="prev">${esc(d.prev)}</div></div></div>`).join('');
+}
+function linkify(s) { return esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'); }
+function renderMsgs(keepScroll) {
+  const box = $('msgs'), inner = $('msgsInner');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  let html = '';
+  if (current === 'friend') {
+    if (!history.length) {
+      html = `<div class="empty" style="height:60vh">${avatar(peer.name || '?', '')}<div style="font-size:16px;font-weight:600;color:var(--text)">${esc(peerName())}</div>
+        <div>${peer.name ? '还没有消息，说点什么吧' : '把这个网址和房间码发给朋友，对方进入后这里会显示他的名字'}</div></div>`;
+    }
+    let prevDay = '', prevFrom = '', prevTs = 0;
+    for (const m of history) {
+      const day = dayLabel(m.ts);
+      if (day !== prevDay) { html += `<div class="divider">${day}</div>`; prevDay = day; prevFrom = ''; }
+      const mine = m.from === me.id;
+      const cont = m.from === prevFrom && m.ts - prevTs < 5 * 60e3;
+      const content = (m.img ? `<img src="${esc(m.img)}" alt="">` : '') + (m.text ? linkify(m.text) : '');
+      html += mine
+        ? `<div class="m mine ${cont?'cont':''}"><div class="body">${cont?'':`<div class="info">${fullTime(m.ts)}</div>`}
+            <div class="bub">${content}</div><div class="tick">${m === history.filter(x=>x.from===me.id).pop() ? (m.pending ? '发送中…' : m.read ? '已读' : '已发送') : ''}</div></div></div>`
+        : `<div class="m theirs ${cont?'cont':''}">${avatar(m.name, 'sm')}<div class="body">${cont?'':`<div class="info"><b>${esc(m.name)}</b>${fullTime(m.ts)}</div>`}
+            <div class="bub">${content}</div></div></div>`;
+      prevFrom = m.from; prevTs = m.ts;
+    }
+  } else {
+    const d = DECOYS.find(x => x.id === current);
+    const base = Date.now() - 3 * 3600e3;
+    html += `<div class="divider">今天</div>`;
+    d.msgs.forEach(([who, text], i) => {
+      const ts = base + i * 7 * 60e3;
+      html += who === '你'
+        ? `<div class="m mine"><div class="body"><div class="info">${fullTime(ts)}</div><div class="bub">${esc(text)}</div></div></div>`
+        : `<div class="m theirs">${avatar(who, 'sm')}<div class="body"><div class="info"><b>${esc(who)}</b>${fullTime(ts)}</div><div class="bub">${esc(text)}</div></div></div>`;
+    });
+  }
+  inner.innerHTML = html;
+  inner.querySelectorAll('.bub img').forEach(img => img.onclick = () => { $('lightbox').querySelector('img').src = img.src; $('lightbox').style.display = 'grid'; });
+  if (!keepScroll || atBottom) scrollBottom();
+}
+function renderTyping() {
+  $('typing').innerHTML = current === 'friend' && Date.now() < typingUntil ? `${esc(peer.name || '对方')} 正在键入<span></span><span></span><span></span>` : '';
+}
+function renderBadge() {
+  const b = $('railBadge'); b.style.display = unread ? 'block' : 'none'; b.textContent = unread;
+  document.title = '聊天';
+}
+function renderAll() { renderHeader(); renderList(); renderMsgs(true); renderTyping(); }
+function scrollBottom() { const b = $('msgs'); requestAnimationFrame(() => b.scrollTop = b.scrollHeight); }
+function renderMe() { const c = colorOf(me?.name || '?'); const el = $('meAv');
+  el.style.background = tint(c, .78); el.style.color = c; el.firstChild && el.firstChild.nodeType === 3 && el.firstChild.remove();
+  el.insertBefore(document.createTextNode(initials(me?.name || '?')), el.firstChild); }
+
+function select(id) {
+  current = id;
+  if (id === 'friend') { unread = 0; renderBadge(); }
+  renderAll(); scrollBottom();
+  if (id === 'friend') $('input').focus();
+}
+
+/* ================= events ================= */
+document.addEventListener('click', e => {
+  const it = e.target.closest('.item'); if (it) select(it.dataset.id);
+  if (!e.target.closest('#menu') && !e.target.closest('#topMenu') && !e.target.closest('#chatMenu')) $('menu').style.display = 'none';
+  if (!e.target.closest('#emojiPop') && !e.target.closest('#emojiBtn')) $('emojiPop').style.display = 'none';
+});
+const input = $('input');
+let lastTypingSent = 0;
+input.addEventListener('input', () => {
+  input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+  $('sendBtn').classList.toggle('ready', !!input.value.trim());
+  if (current === 'friend' && Date.now() - lastTypingSent > 2500 && input.value) { lastTypingSent = Date.now(); publish({ t:'typing' }); }
+});
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(); }
+});
+function doSend() {
+  if (current !== 'friend') { input.value = ''; input.dispatchEvent(new Event('input')); return; }
+  send(input.value); input.value = ''; input.dispatchEvent(new Event('input'));
+}
+$('sendBtn').onclick = doSend;
+
+// boss key: Esc toggles between friend chat and a work chat
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('setup').classList.contains('show')) {
+    $('lightbox').style.display = 'none';
+    select(current === 'friend' ? 'd1' : 'friend');
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') { e.preventDefault(); $('search').focus(); }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && current === 'friend') { unread = 0; renderBadge(); } });
+
+// emoji
+const EMO = '😀😂🤣😊😍😘😎🤔😴😭😡👍👎👏🙏💪🎉❤️🔥✨😅🙃😏🥲🤡💀👀☕🍜🍺🐟✅'.match(/\p{Extended_Pictographic}️?/gu);
+$('emojiPop').innerHTML = EMO.map(x => `<button>${x}</button>`).join('');
+$('emojiPop').onclick = e => { if (e.target.tagName === 'BUTTON') { input.value += e.target.textContent; input.dispatchEvent(new Event('input')); input.focus(); } };
+$('emojiBtn').onclick = () => { const p = $('emojiPop'); p.style.display = p.style.display === 'grid' ? 'none' : 'grid'; };
+
+// images (compressed, sent as data URL)
+function sendImage(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const img = new Image(), url = URL.createObjectURL(file);
+  img.onload = () => {
+    const s = Math.min(1, 1024 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = img.width * s; c.height = img.height * s;
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    URL.revokeObjectURL(url);
+    if (current === 'friend') send('', c.toDataURL('image/jpeg', .78));
+  };
+  img.src = url;
+}
+$('attachBtn').onclick = () => $('file').click();
+$('file').onchange = e => { sendImage(e.target.files[0]); e.target.value = ''; };
+input.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith('image/')); if (f) { e.preventDefault(); sendImage(f); } });
+$('lightbox').onclick = () => $('lightbox').style.display = 'none';
+
+// menu
+function showMenu(btn) { const r = btn.getBoundingClientRect(), m = $('menu');
+  m.style.display = 'block'; m.style.top = r.bottom + 4 + 'px'; m.style.left = Math.min(r.left, innerWidth - 200) + 'px'; }
+$('topMenu').onclick = e => showMenu(e.currentTarget);
+$('chatMenu').onclick = e => showMenu(e.currentTarget);
+$('menu').onclick = e => {
+  const a = e.target.dataset.a; $('menu').style.display = 'none';
+  if (a === 'settings') openSetup();
+  if (a === 'clear' && confirm('只清空这台电脑上的记录，确定吗？')) { history = []; saveHistory(); renderAll(); }
+};
+
+// setup
+function openSetup() {
+  $('sName').value = me?.name || ''; $('sRoom').value = me?.room || params.get('room') || '';
+  $('sCancel').style.display = me ? '' : 'none';
+  $('setup').classList.add('show'); setTimeout(() => $(me ? 'sRoom' : 'sName').focus(), 50);
+}
+$('sCancel').onclick = () => $('setup').classList.remove('show');
+$('sOk').onclick = () => {
+  const name = $('sName').value.trim(), room = $('sRoom').value.trim();
+  if (!name) return $('sName').focus();
+  if (room.length < 4) return $('sRoom').focus();
+  const changedRoom = !me || me.room !== room;
+  me = { id: me?.id || uid(), name, room }; store.set('me', me);
+  if (changedRoom) { peer = {}; store.set('peer', peer); lastSeen = 0; }
+  $('setup').classList.remove('show'); renderMe(); connect();
+};
+$('sRoom').addEventListener('keydown', e => { if (e.key === 'Enter') $('sOk').click(); });
+$('sName').addEventListener('keydown', e => { if (e.key === 'Enter') $('sRoom').focus(); });
+
+/* ================= boot ================= */
+renderList(); renderHeader();
+if (me) { renderMe(); connect(); } else openSetup();
+})();
+</script>
+</body>
+</html>
