@@ -386,11 +386,14 @@ svg{display:block}
 'use strict';
 /* ================= config ================= */
 const params = new URLSearchParams(location.search);
-const BROKERS = params.get('broker') ? [params.get('broker')] : [
-  'wss://broker.emqx.io:8084/mqtt',
-  'wss://broker.hivemq.com:8884/mqtt',
-  'wss://test.mosquitto.org:8081/mqtt'
+const DEFAULT_BROKERS = [
+  { name:'EMQX',      url:'wss://broker.emqx.io:8084/mqtt' },
+  { name:'HiveMQ',    url:'wss://broker.hivemq.com:8884/mqtt' },
+  { name:'Eclipse',   url:'wss://mqtt.eclipseprojects.io:443/mqtt' },
+  { name:'Mosquitto', url:'wss://test.mosquitto.org:8081/mqtt' },
 ];
+// ?broker=wss://a,wss://b  overrides the list (comma-separated)
+const BROKERS = params.get('broker') ? params.get('broker').split(',').map((u, i) => ({ name:'自定义' + (i + 1), url:u.trim() })) : DEFAULT_BROKERS;
 const LS = k => 'tchat_' + k;
 const store = {
   get(k, d) { try { const v = localStorage.getItem(LS(k)); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -434,8 +437,7 @@ let peer = store.get('peer', {});          // {name, id}
 let history = [];
 let current = 'friend';
 let lastSeen = 0, typingUntil = 0, unread = 0;
-let client = null, key = null, topic = '';
-let brokerIdx = 0;
+let key = null, topic = '';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -498,58 +500,69 @@ function addMessage(m) {
 }
 
 /* ================= networking ================= */
-let gen = 0, connState = 'idle', downSince = 0, lastErr = '';
-brokerIdx = Math.max(0, BROKERS.indexOf(store.get('broker', ''))) ;
+/* Every broker is connected at the same time. Each outgoing packet is published
+   to all connected brokers with a packet id (pid); receivers drop repeats. */
+let conns = [], gen = 0, downSince = 0, helloAt = 0;
+const seenPkt = new Map();
+function dupPacket(pid) {
+  if (!pid) return false;
+  if (seenPkt.has(pid)) return true;
+  seenPkt.set(pid, Date.now());
+  if (seenPkt.size > 3000) { const cut = Date.now() - 10 * 60e3; for (const [k, t] of seenPkt) if (t < cut) seenPkt.delete(k); }
+  return false;
+}
+const anyUp = () => conns.some(c => c.client && c.client.connected);
 function setConn(t) { if ($('conn').textContent !== t) { $('conn').textContent = t; renderHeader(); } }
 function updateConn() {
-  const url = BROKERS[brokerIdx % BROKERS.length].replace(/^wss?:\/\//, '').replace(/[:/].*$/, '');
-  $('conn').title = `服务器: ${url}${lastErr ? '\n最近错误: ' + lastErr : ''}`;
-  if (connState === 'up') return setConn('');
-  // brief blips are hidden; only show after 5s of being down
-  if (downSince && Date.now() - downSince > 5000) setConn(connState === 'never' ? '正在连接…' : '连接中断，正在重连…');
+  $('conn').title = conns.map(c => `${c.client && c.client.connected ? '✓' : '×'} ${c.name}${c.err && !(c.client && c.client.connected) ? '  (' + c.err + ')' : ''}`).join('\n');
+  if (anyUp()) { downSince = 0; return setConn(''); }
+  if (!downSince) downSince = Date.now();
+  if (Date.now() - downSince > 5000) setConn(conns.some(c => c.everUp) ? '连接中断，正在重连…' : '正在连接…');
 }
 setInterval(updateConn, 1000);
 async function connect() {
   const my = ++gen;
-  if (client) { try { client.end(true); } catch {} client = null; }
+  for (const c of conns) { try { c.client.end(true); } catch {} }
+  conns = [];
   key = await deriveKey(me.room);
   topic = await roomTopic(me.room);
   if (my !== gen) return;
   loadHistory(); renderAll();
   if (typeof mqtt === 'undefined') { setConn('离线'); return; }
-  const url = BROKERS[brokerIdx % BROKERS.length];
-  connState = 'never'; downSince = Date.now(); lastErr = '';
-  const c = mqtt.connect(url, { clientId: 'tc_' + uid(), clean: true, reconnectPeriod: 2000, connectTimeout: 10000, keepalive: 60 });
-  client = c;
-  c.on('connect', () => {
-    if (my !== gen) return;
-    connState = 'up'; downSince = 0; store.set('broker', url); updateConn();
-    c.subscribe(topic, { qos: 1 });
-    publish({ t:'hello' });
+  downSince = Date.now();
+  conns = BROKERS.map(b => {
+    const c = { name: b.name, url: b.url, err: '', everUp: false, client: null };
+    try {
+      c.client = mqtt.connect(b.url, { clientId: 'tc_' + uid(), clean: true, reconnectPeriod: 3000, connectTimeout: 12000, keepalive: 60 });
+    } catch (e) { c.err = e.message; return c; }
+    c.client.on('connect', async () => {
+      if (my !== gen) return;
+      c.everUp = true; c.err = ''; updateConn();
+      c.client.subscribe(topic, { qos: 1 });
+      if (Date.now() - helloAt > 3000) { helloAt = Date.now(); publish({ t:'hello' }); }
+      flushPending();
+    });
+    c.client.on('message', async (_t, payload) => {
+      if (my !== gen) return;
+      let d; try { d = await open(payload.toString()); } catch { return; }
+      if (!d || d.from === me.id || dupPacket(d.pid)) return;
+      handle(d);
+    });
+    c.client.on('error', e => { c.err = (e && e.message) || String(e); console.warn('[chat]', c.name, c.err); });
+    c.client.on('close', () => updateConn());
+    return c;
   });
-  c.on('message', async (_t, payload) => {
-    if (my !== gen) return;
-    let d; try { d = await open(payload.toString()); } catch { return; }
-    if (!d || d.from === me.id) return;
-    handle(d);
-  });
-  c.on('close', () => { if (my !== gen) return; if (connState === 'up') { connState = 'down'; downSince = Date.now(); } });
-  c.on('error', e => { lastErr = (e && e.message) || String(e); console.warn('[chat]', url, lastErr); });
-  // if this server stays unreachable for 20s, try the next one
-  const watchdog = setInterval(() => {
-    if (my !== gen) return clearInterval(watchdog);
-    if (connState !== 'up' && downSince && Date.now() - downSince > 20000 && BROKERS.length > 1) {
-      clearInterval(watchdog); brokerIdx++; connect();
-    }
-  }, 2000);
+  updateConn();
 }
-function kick() { if (me && client && !client.connected && connState !== 'up') { try { client.reconnect(); } catch {} } }
+function kick() { for (const c of conns) if (c.client && !c.client.connected) { try { c.client.reconnect(); } catch {} } }
 window.addEventListener('online', kick);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
 async function publish(obj) {
-  if (!client || !client.connected) return false;
-  obj.from = me.id; obj.name = me.name;
-  client.publish(topic, await seal(obj), { qos: 1 });
+  const live = conns.filter(c => c.client && c.client.connected);
+  if (!live.length) return false;
+  obj.from = me.id; obj.name = me.name; obj.pid = uid();
+  const payload = await seal(obj);
+  for (const c of live) { try { c.client.publish(topic, payload, { qos: 1 }); } catch {} }
   return true;
 }
 function seen(d) {
